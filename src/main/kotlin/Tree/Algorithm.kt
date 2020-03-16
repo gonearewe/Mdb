@@ -2,7 +2,33 @@ package Tree
 
 import java.util.*
 
-class Algorithm
+class Algorithm private constructor() {
+    lateinit var root: BPlusTreeNode
+
+    companion object {
+        fun newBPlusTree(key: Int): Algorithm {
+            val tree = Algorithm()
+            tree.root = BPlusLeafNode()
+            return tree
+        }
+    }
+
+    fun search(key: Int): Pair<Int, String>? {
+        return root.search(key)
+    }
+
+    fun insert(record: Pair<Int, String>): Boolean {
+        if (root.isFull()) { // this is when the tree is heightened
+            val (key, left, right) = root.splitSelf(root.order / 2)
+            root = BPlusInternalTreeNode(key, left, right)
+        }
+        return root.insert(record)
+    }
+
+    fun delete(key: Int): Boolean {
+        return root.delete(key)
+    }
+}
 
 interface BPlusTreeNode {
     val id: String
@@ -46,18 +72,27 @@ interface BPlusTreeNode {
 }
 
 class BPlusInternalTreeNode(
-        val keys: LinkedList<Int> = LinkedList<Int>(),
-        val children: LinkedList<BPlusTreeNode> = LinkedList<BPlusTreeNode>()
+        oneKey: Int,
+        leftChild: BPlusTreeNode,
+        rightChild: BPlusTreeNode
 ) : BPlusTreeNode {
     companion object {
         var cnt = 0
     }
 
     override val id: String
+    val keys: LinkedList<Int> = LinkedList<Int>(),
+    val children: LinkedList<BPlusTreeNode> = LinkedList<BPlusTreeNode>()
 
     init {
         id = "I_$cnt"
         cnt++
+    }
+
+    init {
+        keys.add(oneKey)
+        children.add(leftChild)
+        children.add(rightChild)
     }
 
     override fun search(key: Int): Pair<Int, String>? {
