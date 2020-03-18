@@ -1,5 +1,0 @@
-package Tree
-
-fun main() {
-
-}

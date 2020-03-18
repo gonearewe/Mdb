@@ -1,12 +1,13 @@
-package Tree
+package tree
 
 import java.util.*
+import kotlin.collections.ArrayList
 
 class Algorithm private constructor() {
     lateinit var root: BPlusTreeNode
 
     companion object {
-        fun newBPlusTree(key: Int): Algorithm {
+        fun newBPlusTree(): Algorithm {
             val tree = Algorithm()
             tree.root = BPlusLeafNode()
             return tree
@@ -28,6 +29,8 @@ class Algorithm private constructor() {
     fun delete(key: Int): Boolean {
         return root.delete(key)
     }
+
+    fun snapshot() = root.snapshot()
 }
 
 interface BPlusTreeNode {
@@ -44,6 +47,9 @@ interface BPlusTreeNode {
     // delete deletes a record according to the given key and the
     // returned value tells if any record is actually deleted(meaning the record may not exists).
     fun delete(key: Int): Boolean
+
+    // methods for DEBUG
+    fun snapshot(): MutableList<String>
 
     // helper methods for insert
 
@@ -71,25 +77,23 @@ interface BPlusTreeNode {
     fun mergeWith(demotedKey: Int, other: BPlusTreeNode): BPlusTreeNode
 }
 
-class BPlusInternalTreeNode(
-        oneKey: Int,
-        leftChild: BPlusTreeNode,
-        rightChild: BPlusTreeNode
+class BPlusInternalTreeNode internal constructor(
+        private val keys: LinkedList<Int> = LinkedList<Int>(),
+        private val children: LinkedList<BPlusTreeNode> = LinkedList<BPlusTreeNode>()
 ) : BPlusTreeNode {
     companion object {
         var cnt = 0
     }
 
     override val id: String
-    val keys: LinkedList<Int> = LinkedList<Int>(),
-    val children: LinkedList<BPlusTreeNode> = LinkedList<BPlusTreeNode>()
+
 
     init {
         id = "I_$cnt"
         cnt++
     }
 
-    init {
+    constructor(oneKey: Int, leftChild: BPlusTreeNode, rightChild: BPlusTreeNode) : this() {
         keys.add(oneKey)
         children.add(leftChild)
         children.add(rightChild)
@@ -162,7 +166,7 @@ class BPlusInternalTreeNode(
 
     // splitChildAt splits child at given index into two nodes and adds a new key to self.
     private fun splitChildAt(index: Int) {
-        val splitPoint = order / 2 // it belongs to the new right child
+        val splitPoint = if (this.isFull()) order / 2 else children.size / 2 // it belongs to the new right child
         val (newKey, left, right) = children[index].splitSelf(splitPoint)
         children[splitPoint] = right
         children.add(splitPoint, left)
@@ -249,6 +253,10 @@ class BPlusInternalTreeNode(
         return this
     }
 
+    override fun snapshot(): MutableList<String> {
+        return if (children.isEmpty()) ArrayList<String>() else children[0].snapshot()
+    }
+
     override fun toString(): String {
         return buildString {
             append("id=$id,")
@@ -279,7 +287,7 @@ class BPlusLeafNode(
     }
 
     override val id: String
-    var nextLeaf: BPlusLeafNode? = null
+    private var nextLeaf: BPlusLeafNode? = null
 
     init {
         id = "L_${cnt}"
@@ -307,7 +315,10 @@ class BPlusLeafNode(
     }
 
     override fun splitSelf(splitPoint: Int): Triple<Int, BPlusTreeNode, BPlusTreeNode> {
-        val recordsOfLeft = PriorityQueue<Pair<Int, String>>()
+        val recordsOfLeft = PriorityQueue<Pair<Int, String>>(
+                kotlin.Comparator<Pair<Int, String>> { a: Pair<Int, String>, b: Pair<Int, String> ->
+                    a.first - b.first // so that the top's key is the minimum
+                })
         for (i in 0..splitPoint) {
             recordsOfLeft.offer(records.poll())
         }
@@ -353,6 +364,15 @@ class BPlusLeafNode(
         // for a leaf node, we don't need the demoted key
         records.addAll((other as BPlusLeafNode).records)// for B+ Tree, nodes on the same depth are isomorphic
         return this
+    }
+
+    override fun snapshot(): MutableList<String> {
+        return ArrayList<String>().also {
+            it.add(records.toString())
+            if (nextLeaf != null) {
+                it.addAll(nextLeaf!!.snapshot())
+            }
+        }
     }
 
     override fun toString(): String {
