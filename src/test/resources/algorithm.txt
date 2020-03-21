@@ -1,0 +1,156 @@
+# Tests Resources for B+ Tree Algorithm
+# FORMAT:
+# search <id>: <expected value>
+# insert <id> <value>: <expected result>
+# delete <id>: <expected result>
+
+insert 1 First: true
+insert 2 Second: true
+insert 3 Third: true
+insert 4 Fourth: true
+insert 5 Fifth: true
+insert 6 Sixth: true
+insert 7 Seventh: true
+
+search 4: Fourth
+search 7: Seventh
+search 1: First
+
+insert 2 Again: false
+insert 7 Seventh: false
+search 0: null
+
+delete 4: true
+search 4: null
+insert 4 NewFourth: true
+search 4: NewFourth
+
+delete 0: false
+search 9: null
+insert 10 New: true
+search 10: New
+
+insert 12 One12: true
+insert 14 One14: true
+insert 15 One15: true
+insert 17 One17: true
+insert 20 One20: true
+insert 13 One13: true
+insert 18 One18: true
+insert 21 One21: true
+insert 28 One28: true
+insert 16 One16: true
+delete 16: true
+delete 28: true
+delete 21: true
+delete 18: true
+delete 13: true
+delete 20: true
+delete 17: true
+delete 12: true
+search 15: One15
+search 1: First
+search 3: Third
+search 7: Seventh
+
+# insert id 30~70 and then delete id 40~59 and then search id 30~70
+
+insert 30 AB: true
+insert 32 AB: true
+insert 33 AB: true
+insert 34 AB: true
+insert 35 AB: true
+insert 36 AB: true
+insert 37 AB: true
+insert 38 AB: true
+insert 39 AB: true
+insert 40 AB: true
+insert 41 AB: true
+insert 42 AB: true
+insert 43 AB: true
+insert 44 AB: true
+insert 45 AB: true
+insert 46 AB: true
+insert 47 AB: true
+insert 48 AB: true
+insert 49 AB: true
+insert 51 AB: true
+insert 52 AB: true
+insert 53 AB: true
+insert 54 AB: true
+insert 55 AB: true
+insert 56 AB: true
+insert 57 AB: true
+insert 58 AB: true
+insert 59 AB: true
+insert 60 AB: true
+insert 61 AB: true
+insert 62 AB: true
+insert 63 AB: true
+insert 64 AB: true
+insert 65 AB: true
+insert 66 AB: true
+insert 67 AB: true
+insert 68 AB: true
+insert 69 AB: true
+insert 70 AB: true
+
+delete 40: true
+delete 41: true
+delete 42: true
+delete 43: true
+delete 44: true
+delete 45: true
+delete 46: true
+delete 47: true
+delete 48: true
+delete 49: true
+delete 51: true
+delete 52: true
+delete 53: true
+delete 54: true
+delete 55: true
+delete 56: true
+delete 57: true
+delete 58: true
+delete 59: true
+
+search 30: AB
+search 32: AB
+search 33: AB
+search 34: AB
+search 35: AB
+search 36: AB
+search 37: AB
+search 38: AB
+search 39: AB
+search 40: null
+search 41: null
+search 42: null
+search 43: null
+search 44: null
+search 45: null
+search 46: null
+search 47: null
+search 48: null
+search 49: null
+search 51: null
+search 52: null
+search 53: null
+search 54: null
+search 55: null
+search 56: null
+search 57: null
+search 58: null
+search 59: null
+search 60: AB
+search 61: AB
+search 62: AB
+search 63: AB
+search 64: AB
+search 65: AB
+search 66: AB
+search 67: AB
+search 68: AB
+search 69: AB
+search 70: AB

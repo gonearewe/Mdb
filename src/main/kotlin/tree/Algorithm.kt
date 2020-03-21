@@ -58,6 +58,7 @@ interface BPlusTreeNode {
     // splitSelf splits current node to two nodes and returns them along
     // with one key which is greater than all keys in the left child and
     // no greater than right ones.
+    // first: promoted key, second: left node, third: right node
     fun splitSelf(splitPoint: Int): Triple<Int, BPlusTreeNode, BPlusTreeNode>
 
     // helper methods for delete
@@ -156,21 +157,21 @@ class BPlusInternalTreeNode internal constructor(
     // locateChildIndex queries current node's keys to tell which child the key belongs to.
     private fun locateChildIndex(key: Int): Int {
         for (index in 0 until keys.size) {
-            if (keys[index] >= key) {
-                return index + 1
+            if (keys[index] > key) {
+                return index
             }
         }
 
-        return keys.size - 1
+        return children.size - 1 // new key is greater than any keys, append to the last child
     }
 
     // splitChildAt splits child at given index into two nodes and adds a new key to self.
     private fun splitChildAt(index: Int) {
-        val splitPoint = if (this.isFull()) order / 2 else children.size / 2 // it belongs to the new right child
+        val splitPoint = order / 2  // it belongs to the new right child
         val (newKey, left, right) = children[index].splitSelf(splitPoint)
-        children[splitPoint] = right
-        children.add(splitPoint, left)
-        keys.add(splitPoint, newKey)
+        children[index] = right
+        children.add(index, left)
+        keys.add(index, newKey)
     }
 
     override fun splitSelf(splitPoint: Int): Triple<Int, BPlusTreeNode, BPlusTreeNode> {
@@ -276,11 +277,7 @@ class BPlusInternalTreeNode internal constructor(
 }
 
 class BPlusLeafNode(
-        var records: PriorityQueue<Pair<Int, String>> = PriorityQueue<Pair<Int, String>>(
-                kotlin.Comparator<Pair<Int, String>> { a: Pair<Int, String>, b: Pair<Int, String> ->
-                    a.first - b.first // so that the top's key is the minimum
-                }
-        )
+        var records: Records<String> = Records<String>()
 ) : BPlusTreeNode {
     companion object {
         var cnt = 0
@@ -315,20 +312,20 @@ class BPlusLeafNode(
     }
 
     override fun splitSelf(splitPoint: Int): Triple<Int, BPlusTreeNode, BPlusTreeNode> {
-        val recordsOfLeft = PriorityQueue<Pair<Int, String>>(
-                kotlin.Comparator<Pair<Int, String>> { a: Pair<Int, String>, b: Pair<Int, String> ->
-                    a.first - b.first // so that the top's key is the minimum
-                })
+        val recordsOfLeft = Records<String>()
         for (i in 0..splitPoint) {
             recordsOfLeft.offer(records.poll())
         }
 
-        val left = BPlusLeafNode(recordsOfLeft)
-        left.nextLeaf = nextLeaf
-        nextLeaf = left
+        // exchange records in the node
+        val rightLeaf = BPlusLeafNode(this.records) // generate a right leaf
+        this.records = recordsOfLeft // this becomes left leaf
+        // insert right leaf into the 'nextLeaf' linked list
+        rightLeaf.nextLeaf = nextLeaf
+        nextLeaf = rightLeaf
 
-        val promotedKey = records.first().first
-        return Triple(promotedKey, left, this)
+        val promotedKey = rightLeaf.records.first().first
+        return Triple(promotedKey, this, rightLeaf)
     }
 
     override fun isHalfEmpty(): Boolean {
@@ -346,11 +343,7 @@ class BPlusLeafNode(
         // leaf node doesn't need a demoted key
         val to = brother as BPlusLeafNode // asserting is good to avoid potential mistakes
 
-        val remainings = PriorityQueue<Pair<Int, String>>(
-                kotlin.Comparator<Pair<Int, String>> { a: Pair<Int, String>, b: Pair<Int, String> ->
-                    a.first - b.first // so that the top's key is the minimum
-                }
-        )
+        val remainings = Records<String>()
         for (i in 0 until records.size - 1) {
             remainings.offer(records.poll())
         }
@@ -362,8 +355,16 @@ class BPlusLeafNode(
 
     override fun mergeWith(demotedKey: Int, other: BPlusTreeNode): BPlusTreeNode {
         // for a leaf node, we don't need the demoted key
-        records.addAll((other as BPlusLeafNode).records)// for B+ Tree, nodes on the same depth are isomorphic
-        return this
+        val otherNode = other as BPlusLeafNode
+        val left = if (this.nextLeaf == otherNode) this else otherNode
+        val right = if (this.nextLeaf == otherNode) otherNode else this
+        assert(left.nextLeaf == right)
+
+        left.records.addAll((right.records))// for B+ Tree, nodes on the same depth are isomorphic
+        left.nextLeaf = right.nextLeaf
+        right.nextLeaf = null
+
+        return left
     }
 
     override fun snapshot(): MutableList<String> {
@@ -387,6 +388,12 @@ class BPlusLeafNode(
         }
     }
 }
+
+class Records<V>() : PriorityQueue<Pair<Int, V>>(
+        kotlin.Comparator<Pair<Int, V>> { a: Pair<Int, V>, b: Pair<Int, V> ->
+            a.first - b.first // so that the top's key is the minimum
+        }
+)
 
 fun main() {
 }
