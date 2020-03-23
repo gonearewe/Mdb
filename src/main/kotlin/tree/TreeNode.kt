@@ -4,15 +4,17 @@ import java.util.*
 
 interface TreeNode {
     val id: Int // unique id for identifying tree node
-    val pager: PagerProxy
 
     // an internal node has k children and k-1 keys, order/2 <= k <= order
     val order get() = 9
 
+    // destruct will be called when this node is no longer needed.
+    fun destruct()
+
     // core api for B+ Tree
 
-    fun search(key: Int): Pair<Int, String>?
-    fun insert(record: Pair<Int, String>): Boolean
+    fun search(recordKey: Int): DatabaseRecord?
+    fun insert(record: DatabaseRecord): Boolean
 
     // delete deletes a record according to the given key and the
     // returned value tells if any record is actually deleted(meaning the record may not exists).
@@ -49,51 +51,46 @@ interface TreeNode {
 }
 
 class InternalTreeNode internal constructor(
+        private val pager: PagerProxy,
         private val keys: LinkedList<Int> = LinkedList<Int>(),
         private val children: LinkedList<Int> = LinkedList<Int>()
 ) : TreeNode {
-    companion object {
-        var cnt = 0
-    }
+    override val id: Int = pager.distributeID()
 
-    override val id: Int
-
-
-    init {
-        id = "I_$cnt"
-        cnt++
-    }
-
-    constructor(oneKey: Int, leftChild: TreeNode, rightChild: TreeNode) : this() {
+    constructor(pager: PagerProxy, oneKey: Int, leftChildID: Int, rightChildID: Int) : this(pager) {
         keys.add(oneKey)
-        children.add(leftChild)
-        children.add(rightChild)
+        children.add(leftChildID)
+        children.add(rightChildID)
     }
 
-    override fun search(key: Int): Pair<Int, String>? {
-        return children[locateChildIndex(key)].search(key)
+    override fun destruct() {
+        pager.retrieve(id) // give back node ID distributed when initialised
     }
 
-    override fun insert(record: Pair<Int, String>): Boolean {
-        val index = locateChildIndex(record.first)
-        val child = children[index]
+    override fun search(recordKey: Int) = loadChild(children[locateChildIndex(recordKey)]).search(recordKey)
+
+    override fun insert(record: DatabaseRecord): Boolean {
+        val index = locateChildIndex(record.key)
+        val child = loadChild(children[index]) // NOTE: I/O read
         if (!child.isFull()) { // it's a simple case
             return child.insert(record)
         }
 
-        splitChildAt(index)
+        splitChildAt(index, child)
         // now children[index] is a new child (left part of the old one)
         // and so is children[index+1] (right part of the old one)
 
         // in fact, we only need to check the two new keys, but whatever
-        val newIndex = locateChildIndex(record.first)
-        return children[newIndex].insert(record) // now it's apparently not full, just insert
+        val newIndex = locateChildIndex(record.key)
+        // NOTE: I/O read, can be optimised actually, see comments in splitSelf
+        return loadChild(children[newIndex]).insert(record) // now it's apparently not full, just insert
     }
 
     override fun delete(key: Int): Boolean {
         val index = locateChildIndex(key)
-        if (!children[index].isHalfEmpty()) {
-            return children[index].delete(key) // the simple case
+        val child = loadChild(children[index])
+        if (!child.isHalfEmpty()) {
+            return child.delete(key) // the simple case
         }
 
         // The target child is half-empty, it's possible that it loses balance after deletion,
@@ -101,23 +98,29 @@ class InternalTreeNode internal constructor(
         // of one of its brother node to make sure that it has one more children than 'half-empty'.
         // After this beforehand process, we don't need any backtrack.
         if (index != children.size - 1) { // this child has a brother to its right
-            if (children[index + 1].isHalfEmpty()) { // we will merge it with its 'right'(literally) brother
-                mergeChildrenAt(index, index + 1)
+            val brother = loadChild(children[index + 1])
+            if (brother.isHalfEmpty()) { // we will merge it with its 'right'(literally) brother
+                mergeChildrenAt(index, child, index + 1, brother)
             } else { // we can borrow from the 'right'(literally) brother
-                childrenBorrow(to = index, from = index + 1)
+                childrenBorrow(to = index, toChild = child, from = index + 1, fromChild = brother)
             }
         } else { // unfortunately, this child is the right most one, we can only turn to its left brother
             // don't worry, for B+ Tree, if we don't have a right brother, we must have a left one,
             // since it's impossible that there is only node on any depth(well, except the root node)
-            if (children[index - 1].isHalfEmpty()) { // we will merge it with its left brother
-                mergeChildrenAt(index, index - 1)
+            val brother = loadChild(children[index - 1])
+            if (brother.isHalfEmpty()) { // we will merge it with its left brother
+                mergeChildrenAt(index, child, index - 1, brother)
             } else { // we can borrow from the left brother
-                childrenBorrow(to = index, from = index - 1)
+                childrenBorrow(to = index, toChild = child, from = index - 1, fromChild = brother)
             }
         }
 
+        // NOTE: end of the modification of this, I/O write
+        pager.persistTreeNode(this)
+
         val newIndex = locateChildIndex(key)
-        return children[newIndex].delete(key)
+        // NOTE: one I/O read
+        return loadChild(children[newIndex]).delete(key)
     }
 
     override fun isFull(): Boolean {
@@ -135,12 +138,15 @@ class InternalTreeNode internal constructor(
         return children.size - 1 // new key is greater than any keys, append to the last child
     }
 
-    // splitChildAt splits child at given index into two nodes and adds a new key to self.
-    private fun splitChildAt(index: Int) {
+    private fun loadChild(id: Int) = pager.loadTreeNode(id)
+
+    // splitChildAt splits child at given index into two nodes and adds a new key to self,
+    // child is provided to avoid redundant I/O read.
+    private fun splitChildAt(index: Int, child: TreeNode) {
         val splitPoint = order / 2  // it belongs to the new right child
-        val (newKey, left, right) = children[index].splitSelf(splitPoint)
-        children[index] = right
-        children.add(index, left)
+        val (newKey, left, right) = child.splitSelf(splitPoint)
+        children[index] = right.id
+        children.add(index, left.id)
         keys.add(index, newKey)
     }
 
@@ -159,7 +165,7 @@ class InternalTreeNode internal constructor(
          * keys:      6 8
          * children: 5 7 9
          */
-        val childrenOfLeft = LinkedList<TreeNode>()
+        val childrenOfLeft = LinkedList<Int>()
         for (i in 0 until splitPoint) {
             childrenOfLeft.offerLast(children.pollFirst())
         }
@@ -170,7 +176,12 @@ class InternalTreeNode internal constructor(
 
         // NOTICE: this key is promoted to its parent since its left has no child.
         val promoted = keys.pollFirst()
-        val left = InternalTreeNode(keysOfLeft, childrenOfLeft)
+        val left = InternalTreeNode(pager, keysOfLeft, childrenOfLeft)
+        // NOTICE: two I/O write, actually you can optimise it into one write
+        // if you choose to decide which child to process next right now
+        pager.persistTreeNode(left)
+        pager.persistTreeNode(this)
+
         return Triple(promoted, left, this)
     }
 
@@ -180,14 +191,14 @@ class InternalTreeNode internal constructor(
 
     // childrenBorrow let children[to] borrow a node and a key from children[from],
     // children[to] is a brother of children[from] which means abs(from-to) == 1.
-    private fun childrenBorrow(to: Int, from: Int) {
+    private fun childrenBorrow(to: Int, toChild: TreeNode, from: Int, fromChild: TreeNode) {
         if (from > to) { // borrow from right brother to child on the left
             // let the two children exchange
-            val promotedkey = children[from].lendItsFirstTo(demotedKey = keys[to], brother = children[to])
+            val promotedkey = fromChild.lendItsFirstTo(demotedKey = keys[to], brother = toChild)
             keys[to] = promotedkey // update key
         } else { // borrow from left brother to child on the right
             // let the two children exchange
-            val promotedkey = children[from].lendItsLastTo(demotedKey = keys[from], brother = children[to])
+            val promotedkey = fromChild.lendItsLastTo(demotedKey = keys[from], brother = toChild)
             keys[from] = promotedkey // update key
         }
     }
@@ -196,22 +207,34 @@ class InternalTreeNode internal constructor(
         val to = brother as InternalTreeNode // asserting is good to avoid potential mistakes
         to.children.addLast(children.pollFirst()) // lend my first tree node to my brother
         to.keys.addLast(demotedKey) // my brother also needs an extra key to keep its structure
-        return keys.pollFirst() // now my first key doesn't have a left child, promote it
+        val promotedKey = keys.pollFirst() // now my first key doesn't have a left child, promote it
+        // NOTE: persist me and my brother, two I/O write
+        pager.persistTreeNode(this)
+        pager.persistTreeNode(to)
+
+        return promotedKey
     }
 
     override fun lendItsLastTo(demotedKey: Int, brother: TreeNode): Int {
         val to = brother as InternalTreeNode // asserting is good to avoid potential mistakes
         to.children.addFirst(children.pollLast()) // lend my last tree node to my brother
         to.keys.addFirst(demotedKey) // my brother also needs an extra key to keep its structure
-        return keys.pollLast() // now my last key doesn't have a right child, promote it
+        val promotedKey = keys.pollLast()
+        // NOTE: persist me and my brother, two I/O write
+        pager.persistTreeNode(this)
+        pager.persistTreeNode(to)
+
+        return promotedKey // now my last key doesn't have a right child, promote it
     }
 
     // mergeChildren merges two half-empty nearby(meaning abs(a-b) == 1) children
     // at index a and b into one child,
-    // one key will be demoted to them for insertion to keep the child's structure.
-    private fun mergeChildrenAt(a: Int, b: Int) {
-        val l = if (a > b) b else a
-        children[l] = children[a].mergeWith(demotedKey = keys[l], other = children[b]) // the merged one child
+    // one key will be demoted to them for insertion to keep the child's structure,
+    // aNode and bNode are provided to avoid redundant I/O read.
+    private fun mergeChildrenAt(a: Int, aNode: TreeNode, b: Int, bNode: TreeNode) {
+        val l = if (a > b) b else a // index of node on the left
+        val lNode = if (a > b) bNode else aNode // node on the left
+        children[l] = aNode.mergeWith(demotedKey = keys[l], other = bNode).id // the merged one child
         children.removeAt(l + 1)
         keys.removeAt(l) // remove the demoted key
     }
@@ -221,11 +244,15 @@ class InternalTreeNode internal constructor(
         keys.addLast(demotedKey) // insert in the middle
         keys.addAll(node.keys)
         children.addAll(node.children)
+        // NOTE: I/O write
+        pager.persistTreeNode(this)
+        // NOTE: destroy useless node
+        node.destruct()
         return this
     }
 
     override fun snapshot(): MutableList<String> {
-        return if (children.isEmpty()) ArrayList<String>() else children[0].snapshot()
+        return if (children.isEmpty()) ArrayList<String>() else loadChild(children[0]).snapshot()
     }
 
     override fun toString(): String {
@@ -234,47 +261,54 @@ class InternalTreeNode internal constructor(
             append("keys= $keys, ")
             append("children= ")
             children.forEach {
-                append(it.id)
+                append(loadChild(it).id)
                 append(", ")
             }
 
             append("\n")
             children.forEach {
-                append(it.toString())
+                append(loadChild(it).toString())
             }
         }
     }
 }
 
 class LeafNode(
-        var records: Records<String> = Records<String>()
+        private val pager: PagerProxy,
+        private var records: DatabaseRecords = DatabaseRecords()
 ) : TreeNode {
-    companion object {
-        var cnt = 0
+    override val id: Int = pager.distributeID()
+    private var nextLeaf: Int = -1024 // I don't have a nextLeaf on initialization
+    private val hasNextLeaf
+        get() = nextLeaf >= 0 && nextLeaf != id
+
+    override fun destruct() {
+        pager.retrieve(id) // give back node ID distributed when initialised
     }
 
-    override val id: String
-    private var nextLeaf: LeafNode? = null
-
-    init {
-        id = "L_${cnt}"
-        cnt++
+    override fun search(key: Int): DatabaseRecord? {
+        return records.find { it.key == key }
     }
 
-    override fun search(key: Int): Pair<Int, String>? {
-        return records.find { it.first == key }
-    }
-
-    override fun insert(record: Pair<Int, String>): Boolean {
-        if (search(record.first) != null) {
+    override fun insert(record: DatabaseRecord): Boolean {
+        if (search(record.key) != null) {
             return false // record already exists, insertion fails
         }
         records.offer(record)
+        // NOTE: I/O write
+        pager.persistTreeNode(this)
+
         return true
     }
 
     override fun delete(key: Int): Boolean {
-        return records.removeIf { it.first == key }
+        if (records.removeIf { it.key == key }) {
+            // NOTE: I/O write
+            pager.persistTreeNode(this)
+            return true
+        } else {
+            return false // not found, nothing changed for this node
+        }
     }
 
     override fun isFull(): Boolean {
@@ -282,19 +316,23 @@ class LeafNode(
     }
 
     override fun splitSelf(splitPoint: Int): Triple<Int, TreeNode, TreeNode> {
-        val recordsOfLeft = Records<String>()
+        val recordsOfLeft = DatabaseRecords()
         for (i in 0..splitPoint) {
             recordsOfLeft.offer(records.poll())
         }
 
         // exchange records in the node
-        val rightLeaf = LeafNode(this.records) // generate a right leaf
+        val rightLeaf = LeafNode(pager, this.records) // generate a right leaf
         this.records = recordsOfLeft // this becomes left leaf
         // insert right leaf into the 'nextLeaf' linked list
         rightLeaf.nextLeaf = nextLeaf
-        nextLeaf = rightLeaf
+        nextLeaf = rightLeaf.id
 
-        val promotedKey = rightLeaf.records.first().first
+        // NOTE: two I/O write
+        pager.persistTreeNode(this)
+        pager.persistTreeNode(rightLeaf)
+
+        val promotedKey = rightLeaf.records.first().key
         return Triple(promotedKey, this, rightLeaf)
     }
 
@@ -306,33 +344,44 @@ class LeafNode(
         // leaf node doesn't need a demoted key
         val to = brother as LeafNode // asserting is good to avoid potential mistakes
         to.records.offer(records.poll())
-        return records.peek().first
+
+        // NOTE: two I/O write
+        pager.persistTreeNode(this)
+        pager.persistTreeNode(to)
+
+        return records.peek().key
     }
 
     override fun lendItsLastTo(demotedKey: Int, brother: TreeNode): Int {
         // leaf node doesn't need a demoted key
         val to = brother as LeafNode // asserting is good to avoid potential mistakes
 
-        val remainings = Records<String>()
+        val remainings = DatabaseRecords()
         for (i in 0 until records.size - 1) {
             remainings.offer(records.poll())
         }
 
         to.records.offer(records.poll()) // lend my brother my last tree node
         records = remainings // remove the last element
-        return to.records.peek().first
+        // NOTE: two I/O write
+        pager.persistTreeNode(this)
+        pager.persistTreeNode(to)
+
+        return to.records.peek().key
     }
 
     override fun mergeWith(demotedKey: Int, other: TreeNode): TreeNode {
         // for a leaf node, we don't need the demoted key
         val otherNode = other as LeafNode
-        val left = if (this.nextLeaf == otherNode) this else otherNode
-        val right = if (this.nextLeaf == otherNode) otherNode else this
-        assert(left.nextLeaf == right)
+        val left = if (this.nextLeaf == otherNode.id) this else otherNode
+        val right = if (this.nextLeaf == otherNode.id) otherNode else this
+        assert(left.nextLeaf == right.id)
 
         left.records.addAll((right.records))// for B+ Tree, nodes on the same depth are isomorphic
         left.nextLeaf = right.nextLeaf
-        right.nextLeaf = null
+
+        right.nextLeaf = -1024 // right node is no longer needed
+        right.destruct()
 
         return left
     }
@@ -340,10 +389,15 @@ class LeafNode(
     override fun snapshot(): MutableList<String> {
         return ArrayList<String>().also {
             it.add(records.toString())
-            if (nextLeaf != null) {
-                it.addAll(nextLeaf!!.snapshot())
+            if (hasNextLeaf) {
+                it.addAll(loadNextLeaf().snapshot())
             }
         }
+    }
+
+    private fun loadNextLeaf(): TreeNode {
+        // NOTE: I/O read
+        return pager.loadTreeNode(nextLeaf)
     }
 
     override fun toString(): String {
@@ -359,8 +413,14 @@ class LeafNode(
     }
 }
 
-class DatabaseRecords() : PriorityQueue<Pair<Int, String>>(
-        kotlin.Comparator<Pair<Int, String>> { a: Pair<Int, String>, b: Pair<Int, String> ->
-            a.first - b.first // so that the top's key is the minimum
+class DatabaseRecord(key: Int, value: String) {
+    private val record = Pair<Int, String>(key, value)
+    val key = record.first
+    val value = record.second
+}
+
+class DatabaseRecords() : PriorityQueue<DatabaseRecord>(
+        kotlin.Comparator<DatabaseRecord> { a: DatabaseRecord, b: DatabaseRecord ->
+            a.key - b.key // so that the top's key is the minimum
         }
 )
