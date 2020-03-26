@@ -1,0 +1,97 @@
+# Test cases for single thread transaction.
+# BEGIN starts a transaction and END marks the end while BREAK forces the transaction to
+# terminate and a roll-back is expected, so that the database remains consistent.
+# FORMAT:
+#   CASE:
+#       insert <id> <value>
+#       delete <id>
+#       set <id> <new_value>
+#       BEGIN
+#       BREAK
+#       END
+#   EXPECTATION(ascending order):
+#       <id> <value>
+
+# command sequences starting with key word COMMANDS
+COMMANDS
+insert 1 One
+insert 2 Two
+insert 3 Three
+BEGIN
+delete 3
+END
+
+# expected results starting with key word EXPECTATIONS
+EXPECTATIONS
+1 One
+2 Two
+
+COMMANDS
+insert 5 Five
+insert 6 Six
+BEGIN
+insert 7 Seven
+insert 8 Eight
+delete 7
+END
+insert 7 New
+
+EXPECTATIONS
+5 Five
+6 Six
+7 New
+8 Eight
+
+COMMANDS
+insert 1 One
+insert 3 Three
+BEGIN
+set 1 NewOne
+insert 2 Two
+set 2 NewTwo
+delete 3
+set 1 AnotherOne
+END
+set 2 AnotherTwo
+
+EXPECTATIONS
+1 AnotherOne
+2 AnotherTwo
+
+COMMANDS
+insert 1 One
+insert 2 Two
+insert 3 Three
+BEGIN
+set 2 NewTwo
+delete 3
+insert 4 Four
+BREAK
+insert 5 Five
+
+EXPECTATIONS
+1 One
+2 Two
+3 Three
+5 Five
+
+COMMANDS
+insert 1 One
+insert 2 Two
+BEGIN
+set 2 NewTwo
+insert 3 Three
+insert 4 Four
+BREAK
+delete 2
+BEGIN
+insert 2 NewTwo
+set 1 NewTwo
+END
+BEGIN
+insert 5 Five
+BREAK
+
+EXPECTATIONS
+1 NewTwo
+2 NewTwo
