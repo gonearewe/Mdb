@@ -1,4 +1,4 @@
-package tree
+package recordManager
 
 import java.util.*
 
@@ -15,6 +15,7 @@ interface TreeNode {
 
     fun search(recordKey: Int): DatabaseRecord?
     fun insert(record: DatabaseRecord): Boolean
+    fun set(record: DatabaseRecord): Boolean
 
     // delete deletes a record according to the given key and the
     // returned value tells if any record is actually deleted(meaning the record may not exists).
@@ -68,6 +69,8 @@ class InternalTreeNode internal constructor(
     }
 
     override fun search(recordKey: Int) = loadChild(children[locateChildIndex(recordKey)]).search(recordKey)
+
+    override fun set(record: DatabaseRecord) = loadChild(children[locateChildIndex(record.key)]).set(record)
 
     override fun insert(record: DatabaseRecord): Boolean {
         val index = locateChildIndex(record.key)
@@ -286,8 +289,18 @@ class LeafNode(
         pager.retrieve(id) // give back node ID distributed when initialised
     }
 
-    override fun search(key: Int): DatabaseRecord? {
-        return records.find { it.key == key }
+    override fun search(recordKey: Int): DatabaseRecord? {
+        return records.find { it.key == recordKey }
+    }
+
+    override fun set(record: DatabaseRecord): Boolean {
+        val r = records.find { it.key == record.key }
+        return if (r != null) {
+            r.value = record.value
+            true
+        } else {
+            false
+        }
     }
 
     override fun insert(record: DatabaseRecord): Boolean {
@@ -416,7 +429,7 @@ class LeafNode(
 class DatabaseRecord(key: Int, value: String) {
     private val record = Pair<Int, String>(key, value)
     val key = record.first
-    val value = record.second
+    var value = record.second
 }
 
 class DatabaseRecords() : PriorityQueue<DatabaseRecord>(
